@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shark Tank Scoreboard</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  button { font-family: inherit; cursor: pointer; }
+  input { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="app" style="min-height:100vh; background:oklch(0.98 0.005 90); color:oklch(0.2 0.01 90); padding:16px 12px 60px;">
+
+  <div style="max-width:960px; margin:0 auto;">
+
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap;">
+      <div>
+        <div style="font-size:22px; font-weight:700; letter-spacing:-0.01em;">Shark Tank Scoreboard</div>
+        <div style="font-size:13px; color:oklch(0.45 0.01 90);">Rows = sharks · Columns = tanks · tap a cell to cycle the result</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:14px; background:white; border:1px solid oklch(0.9 0.005 90); border-radius:14px; padding:10px 14px;">
+        <button id="decRound" style="border:none; background:oklch(0.93 0.005 90); color:oklch(0.3 0.01 90); width:52px; height:52px; border-radius:12px; font-size:28px; font-weight:700; line-height:1;">−</button>
+        <div id="roundLabel" style="font-size:17px; font-weight:800; min-width:100px; text-align:center;">Round 1</div>
+        <button id="incRound" style="border:none; background:oklch(0.55 0.14 25); color:white; width:52px; height:52px; border-radius:12px; font-size:28px; font-weight:700; line-height:1;">+</button>
+      </div>
+    </div>
+
+    <div style="font-size:11px; color:oklch(0.55 0.01 90); margin-bottom:10px; display:flex; gap:14px; flex-wrap:wrap;">
+      <div>tap once → Tank +1 (no sub)</div>
+      <div>tap twice → Tank +3 (submits shark)</div>
+      <div>tap 3x → Shark +1 (submits tank)</div>
+      <div>tap 4x → clear</div>
+    </div>
+
+    <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+      <div style="display:flex; gap:6px; align-items:center; background:white; border:1px solid oklch(0.9 0.005 90); border-radius:10px; padding:6px 8px;">
+        <input id="newTankInput" placeholder="Add tank name" style="border:none; outline:none; font-size:14px; width:110px;">
+        <button id="addTankBtn" style="border:none; background:oklch(0.55 0.14 25); color:white; border-radius:7px; padding:6px 10px; font-size:13px; font-weight:600;">+ Tank</button>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; background:white; border:1px solid oklch(0.9 0.005 90); border-radius:10px; padding:6px 8px;">
+        <input id="newSharkInput" placeholder="Add shark name" style="border:none; outline:none; font-size:14px; width:110px;">
+        <button id="addSharkBtn" style="border:none; background:oklch(0.5 0.13 230); color:white; border-radius:7px; padding:6px 10px; font-size:13px; font-weight:600;">+ Shark</button>
+      </div>
+      <button id="resetAllBtn" style="border:1px solid oklch(0.85 0.01 90); background:white; color:oklch(0.4 0.01 90); border-radius:10px; padding:6px 12px; font-size:13px; margin-left:auto;">Clear all rounds</button>
+    </div>
+
+    <div style="overflow-x:auto; border:1px solid oklch(0.88 0.005 90); border-radius:12px; background:white; margin-bottom:24px;">
+      <div id="grid"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'shark-tank-scoreboard-v3';
+const CYCLE = [null, 'none', 'tank', 'shark'];
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDbf0G4k5LZV9IFW3yv80myWVGgQXcw1Ic",
+  authDomain: "shark-tank-scoreboard.firebaseapp.com",
+  databaseURL: "https://shark-tank-scoreboard-default-rtdb.firebaseio.com",
+  projectId: "shark-tank-scoreboard",
+  storageBucket: "shark-tank-scoreboard.firebasestorage.app",
+  messagingSenderId: "215756049591",
+  appId: "1:215756049591:web:edac2f03077dbc57641132"
+};
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+let state = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved && saved.tanks && saved.sharks) {
+      return { tanks: saved.tanks, sharks: saved.sharks, results: saved.results || {}, round: saved.round || 1 };
+    }
+  } catch (e) {}
+  return {
+    tanks: [
+      { id: 't1', name: 'Mike G' }, { id: 't2', name: 'Roy' }, { id: 't3', name: 'Jeremy' }, { id: 't4', name: 'Dave' }
+    ],
+    sharks: [
+      { id: 's1', name: 'Mike M' }, { id: 's2', name: 'Jill' }, { id: 's3', name: 'Nathan' },
+      { id: 's4', name: 'Gabe' }, { id: 's5', name: 'TK' }, { id: 's6', name: 'Andre' }
+    ],
+    round: 1,
+    results: {}
+  };
+})();
+
+let fbRef = null;
+try {
+  if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
+  fbRef = window.firebase.database().ref('sharkTank');
+  fbRef.on('value', (snap) => {
+    const val = snap.val();
+    if (val) {
+      state = {
+        tanks: val.tanks || state.tanks,
+        sharks: val.sharks || state.sharks,
+        round: val.round || 1,
+        results: val.results || {}
+      };
+      render();
+    }
+  });
+} catch (e) { console.warn('Firebase sync unavailable', e); }
+
+function persist() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  if (fbRef) fbRef.set(state).catch(e => console.warn('Firebase write failed', e));
+}
+
+function addTank() {
+  const input = document.getElementById('newTankInput');
+  const name = input.value.trim();
+  if (!name) return;
+  state.tanks = [...state.tanks, { id: 't' + Date.now(), name }];
+  input.value = '';
+  persist();
+  render();
+}
+
+function addShark() {
+  const input = document.getElementById('newSharkInput');
+  const name = input.value.trim();
+  if (!name) return;
+  state.sharks = [...state.sharks, { id: 's' + Date.now(), name }];
+  input.value = '';
+  persist();
+  render();
+}
+
+function removeTank(id) {
+  state.tanks = state.tanks.filter(t => t.id !== id);
+  persist();
+  render();
+}
+
+function removeShark(id) {
+  state.sharks = state.sharks.filter(s => s.id !== id);
+  persist();
+  render();
+}
+
+function resetAll() {
+  if (!confirm('Clear all rounds and results?')) return;
+  state.results = {};
+  state.round = 1;
+  persist();
+  render();
+}
+
+function incRound() {
+  state.round = state.round + 1;
+  persist();
+  render();
+}
+
+function decRound() {
+  state.round = Math.max(1, state.round - 1);
+  persist();
+  render();
+}
+
+function tapCell(tankId, sharkId) {
+  const key = state.round + '_' + tankId + '_' + sharkId;
+  const current = state.results[key] || null;
+  const idx = CYCLE.indexOf(current);
+  const next = CYCLE[(idx + 1) % CYCLE.length];
+  const results = { ...state.results };
+  if (next === null) delete results[key];
+  else results[key] = next;
+  state.results = results;
+  persist();
+  render();
+}
+
+function badgeFor(result) {
+  const base = 'width:100%; height:100%; min-height:44px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; cursor:pointer;';
+  if (result === 'tank') return base + 'background:oklch(0.55 0.14 25); color:white;';
+  if (result === 'shark') return base + 'background:oklch(0.5 0.13 230); color:white;';
+  if (result === 'none') return base + 'background:oklch(0.9 0.03 90); color:oklch(0.3 0.02 90);';
+  return base + 'background:oklch(0.96 0.005 90); color:oklch(0.65 0.01 90); border:1px dashed oklch(0.85 0.01 90);';
+}
+
+function labelFor(result) {
+  if (result === 'tank') return 'Tank Wins';
+  if (result === 'shark') return 'Shark Wins';
+  if (result === 'none') return 'No Sub';
+  return '—';
+}
+
+function render() {
+  document.getElementById('roundLabel').textContent = 'Round ' + state.round;
+
+  const { tanks, sharks, results, round } = state;
+
+  let html = `<div style="display:grid; grid-template-columns:110px repeat(${tanks.length}, 96px); min-width:max-content;">`;
+
+  html += `<div style="background:oklch(0.93 0.005 90); border-bottom:1px solid oklch(0.85 0.005 90); border-right:1px solid oklch(0.85 0.005 90); padding:8px; position:sticky; left:0; z-index:2;"></div>`;
+
+  tanks.forEach(tank => {
+    html += `<div class="tankHeader" data-id="${tank.id}" style="background:oklch(0.93 0.005 90); border-bottom:1px solid oklch(0.85 0.005 90); border-right:1px solid oklch(0.9 0.005 90); padding:8px 6px; font-size:13px; font-weight:600; display:flex; align-items:center; justify-content:center; text-align:center; cursor:pointer;" title="Tap to remove tank">${escapeHtml(tank.name)}</div>`;
+  });
+
+  sharks.forEach(shark => {
+    html += `<div class="sharkHeader" data-id="${shark.id}" style="background:oklch(0.93 0.005 90); border-bottom:1px solid oklch(0.9 0.005 90); border-right:1px solid oklch(0.85 0.005 90); padding:8px; font-size:13px; font-weight:600; display:flex; align-items:center; position:sticky; left:0; z-index:1; cursor:pointer;" title="Tap to remove shark">${escapeHtml(shark.name)}</div>`;
+    tanks.forEach(tank => {
+      const key = round + '_' + tank.id + '_' + shark.id;
+      const result = results[key];
+      html += `<div style="border-bottom:1px solid oklch(0.9 0.005 90); border-right:1px solid oklch(0.9 0.005 90); padding:4px; display:flex; align-items:center; justify-content:center; min-height:56px;">
+        <div class="cell" data-tank="${tank.id}" data-shark="${shark.id}" style="${badgeFor(result)}">${labelFor(result)}</div>
+      </div>`;
+    });
+  });
+
+  html += `</div>`;
+
+  const grid = document.getElementById('grid');
+  grid.innerHTML = html;
+
+  grid.querySelectorAll('.cell').forEach(el => {
+    el.addEventListener('click', () => tapCell(el.dataset.tank, el.dataset.shark));
+  });
+  grid.querySelectorAll('.tankHeader').forEach(el => {
+    el.addEventListener('click', () => removeTank(el.dataset.id));
+  });
+  grid.querySelectorAll('.sharkHeader').forEach(el => {
+    el.addEventListener('click', () => removeShark(el.dataset.id));
+  });
+}
+
+document.getElementById('incRound').addEventListener('click', incRound);
+document.getElementById('decRound').addEventListener('click', decRound);
+document.getElementById('addTankBtn').addEventListener('click', addTank);
+document.getElementById('addSharkBtn').addEventListener('click', addShark);
+document.getElementById('resetAllBtn').addEventListener('click', resetAll);
+document.getElementById('newTankInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTank(); });
+document.getElementById('newSharkInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addShark(); });
+
+render();
+</script>
+</body>
+</html>
