@@ -30,7 +30,11 @@
 
   <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:36px;">
     <div style="font-size:60px; font-weight:800; letter-spacing:-0.01em; color:var(--text-primary);">Shark Tank</div>
-    <div id="roundLabel" style="font-size:36px; font-weight:700; color:var(--text-secondary);">Round 1</div>
+    <div style="display:flex; align-items:baseline; gap:28px;">
+      <div id="dateLabel" style="font-size:28px; font-weight:600; color:var(--text-secondary);"></div>
+      <div id="durationLabel" style="font-size:28px; font-weight:600; color:var(--text-secondary);"></div>
+      <div id="roundLabel" style="font-size:36px; font-weight:700; color:var(--text-secondary);">Round 1</div>
+    </div>
   </div>
 
   <div style="display:flex; gap:56px; flex:1; min-height:0;">
@@ -94,7 +98,7 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-let state = { tanks: [], sharks: [], results: {}, round: 1 };
+let state = { tanks: [], sharks: [], results: {}, round: 1, sessionDate: null, sessionStartedAt: null, sessionFinishedAt: null };
 
 try {
   if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
@@ -105,12 +109,49 @@ try {
         tanks: val.tanks || [],
         sharks: val.sharks || [],
         results: val.results || {},
-        round: val.round || 1
+        round: val.round || 1,
+        sessionDate: val.sessionDate || null,
+        sessionStartedAt: val.sessionStartedAt || null,
+        sessionFinishedAt: val.sessionFinishedAt || null
       };
       render();
     }
   });
 } catch (e) { console.warn('Firebase sync unavailable', e); }
+
+function getSessionStatus() {
+  if (state.sessionFinishedAt) return 'finished';
+  if (state.sessionStartedAt) return 'active';
+  return 'idle';
+}
+
+function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function updateSessionHeader() {
+  document.getElementById('dateLabel').textContent = formatDate(state.sessionDate);
+  const status = getSessionStatus();
+  const el = document.getElementById('durationLabel');
+  if (status === 'active' && state.sessionStartedAt) {
+    el.textContent = formatDuration(Date.now() - state.sessionStartedAt) + (status === 'active' ? ' ⏱' : '');
+  } else if (status === 'finished' && state.sessionStartedAt && state.sessionFinishedAt) {
+    el.textContent = formatDuration(state.sessionFinishedAt - state.sessionStartedAt) + ' · Finished';
+  } else {
+    el.textContent = '';
+  }
+}
 
 function cellStyle(net) {
   const base = 'font-size:54px; font-weight:800; min-width:70px; text-align:center;';
@@ -133,6 +174,7 @@ function render() {
   const { tanks, sharks, results, round } = state;
 
   document.getElementById('roundLabel').textContent = 'Round ' + round;
+  updateSessionHeader();
 
   const tankStats = {};
   const sharkStats = {};
@@ -194,6 +236,7 @@ function render() {
 }
 
 render();
+setInterval(updateSessionHeader, 1000);
 
 function setupAutoScroll(el, speedPxPerSec, pauseMs) {
   let direction = 1;

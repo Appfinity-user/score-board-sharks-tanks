@@ -30,6 +30,18 @@
       </div>
     </div>
 
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap; background:white; border:1px solid oklch(0.9 0.005 90); border-radius:14px; padding:10px 14px;">
+      <div style="display:flex; align-items:center; gap:18px; flex-wrap:wrap;">
+        <div style="font-size:13px; color:oklch(0.45 0.01 90);">Date: <span id="dateLabel" style="font-weight:700; color:oklch(0.2 0.01 90);">—</span></div>
+        <div style="font-size:13px; color:oklch(0.45 0.01 90);">Duration: <span id="durationLabel" style="font-weight:700; color:oklch(0.2 0.01 90);">—</span></div>
+        <div id="sessionStatusLabel" style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; display:none;"></div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button id="startBtn" style="border:none; background:oklch(0.4 0.13 230); color:white; border-radius:9px; padding:8px 18px; font-size:13px; font-weight:700;">Start</button>
+        <button id="finishBtn" style="border:none; background:oklch(0.3 0.01 90); color:white; border-radius:9px; padding:8px 18px; font-size:13px; font-weight:700;">Finish</button>
+      </div>
+    </div>
+
     <div style="font-size:11px; color:oklch(0.55 0.01 90); margin-bottom:10px; display:flex; gap:14px; flex-wrap:wrap;">
       <div>tap once → Tank +1 (no sub)</div>
       <div>tap twice → Tank +3 (submits shark)</div>
@@ -79,7 +91,10 @@ let state = (() => {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (saved && saved.tanks && saved.sharks) {
-      return { tanks: saved.tanks, sharks: saved.sharks, results: saved.results || {}, round: saved.round || 1 };
+      return {
+        tanks: saved.tanks, sharks: saved.sharks, results: saved.results || {}, round: saved.round || 1,
+        sessionDate: saved.sessionDate || null, sessionStartedAt: saved.sessionStartedAt || null, sessionFinishedAt: saved.sessionFinishedAt || null
+      };
     }
   } catch (e) {}
   return {
@@ -91,7 +106,10 @@ let state = (() => {
       { id: 's4', name: 'Gabe' }, { id: 's5', name: 'TK' }, { id: 's6', name: 'Andre' }
     ],
     round: 1,
-    results: {}
+    results: {},
+    sessionDate: null,
+    sessionStartedAt: null,
+    sessionFinishedAt: null
   };
 })();
 
@@ -106,7 +124,10 @@ try {
         tanks: val.tanks || state.tanks,
         sharks: val.sharks || state.sharks,
         round: val.round || 1,
-        results: val.results || {}
+        results: val.results || {},
+        sessionDate: val.sessionDate || null,
+        sessionStartedAt: val.sessionStartedAt || null,
+        sessionFinishedAt: val.sessionFinishedAt || null
       };
       render();
     }
@@ -151,11 +172,74 @@ function removeShark(id) {
 }
 
 function resetAll() {
+  if (getSessionStatus() === 'finished') return;
   if (!confirm('Clear all rounds and results?')) return;
   state.results = {};
   state.round = 1;
   persist();
   render();
+}
+
+function getSessionStatus() {
+  if (state.sessionFinishedAt) return 'finished';
+  if (state.sessionStartedAt) return 'active';
+  return 'idle';
+}
+
+function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function todayLocalISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function startSession() {
+  if (!confirm('Start a new session? This clears the round, all results, and the current Tanks/Sharks list.')) return;
+  state.tanks = [];
+  state.sharks = [];
+  state.round = 1;
+  state.results = {};
+  state.sessionDate = todayLocalISO();
+  state.sessionStartedAt = Date.now();
+  state.sessionFinishedAt = null;
+  persist();
+  render();
+}
+
+function finishSession() {
+  if (getSessionStatus() === 'finished') return;
+  if (!confirm('Finish this session? Scoring will be locked (read-only) until you start a new one.')) return;
+  state.sessionFinishedAt = Date.now();
+  persist();
+  render();
+}
+
+function updateDurationDisplay() {
+  const status = getSessionStatus();
+  const el = document.getElementById('durationLabel');
+  if (status === 'active' && state.sessionStartedAt) {
+    el.textContent = formatDuration(Date.now() - state.sessionStartedAt);
+  } else if (status === 'finished' && state.sessionStartedAt && state.sessionFinishedAt) {
+    el.textContent = formatDuration(state.sessionFinishedAt - state.sessionStartedAt);
+  } else {
+    el.textContent = '—';
+  }
 }
 
 function incRound() {
@@ -201,6 +285,36 @@ function labelFor(result) {
 function render() {
   document.getElementById('roundLabel').textContent = 'Round ' + state.round;
 
+  const status = getSessionStatus();
+  const locked = status === 'finished';
+
+  document.getElementById('dateLabel').textContent = formatDate(state.sessionDate);
+  updateDurationDisplay();
+
+  const statusEl = document.getElementById('sessionStatusLabel');
+  if (status === 'finished') {
+    statusEl.style.display = 'inline-block';
+    statusEl.textContent = 'Finished · Read-only';
+    statusEl.style.background = 'oklch(0.9 0.02 90)';
+    statusEl.style.color = 'oklch(0.35 0.01 90)';
+  } else if (status === 'active') {
+    statusEl.style.display = 'inline-block';
+    statusEl.textContent = 'Live';
+    statusEl.style.background = 'oklch(0.92 0.06 150)';
+    statusEl.style.color = 'oklch(0.35 0.1 150)';
+  } else {
+    statusEl.style.display = 'none';
+  }
+
+  document.getElementById('decRound').disabled = locked;
+  document.getElementById('incRound').disabled = locked;
+  document.getElementById('newTankInput').disabled = locked;
+  document.getElementById('addTankBtn').disabled = locked;
+  document.getElementById('newSharkInput').disabled = locked;
+  document.getElementById('addSharkBtn').disabled = locked;
+  document.getElementById('resetAllBtn').disabled = locked;
+  document.getElementById('finishBtn').disabled = locked;
+
   const { tanks, sharks, results, round } = state;
 
   let html = `<div style="display:grid; grid-template-columns:110px repeat(${tanks.length}, 96px); min-width:max-content;">`;
@@ -226,6 +340,8 @@ function render() {
 
   const grid = document.getElementById('grid');
   grid.innerHTML = html;
+  grid.style.pointerEvents = locked ? 'none' : '';
+  grid.style.opacity = locked ? '0.65' : '1';
 
   grid.querySelectorAll('.cell').forEach(el => {
     el.addEventListener('click', () => tapCell(el.dataset.tank, el.dataset.shark));
@@ -245,8 +361,11 @@ document.getElementById('addSharkBtn').addEventListener('click', addShark);
 document.getElementById('resetAllBtn').addEventListener('click', resetAll);
 document.getElementById('newTankInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTank(); });
 document.getElementById('newSharkInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addShark(); });
+document.getElementById('startBtn').addEventListener('click', startSession);
+document.getElementById('finishBtn').addEventListener('click', finishSession);
 
 render();
+setInterval(updateDurationDisplay, 1000);
 </script>
 </body>
 </html>
