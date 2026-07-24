@@ -37,8 +37,7 @@
         <div id="sessionStatusLabel" style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; display:none;"></div>
       </div>
       <div style="display:flex; gap:8px;">
-        <button id="startBtn" style="border:none; background:oklch(0.4 0.13 230); color:white; border-radius:9px; padding:8px 18px; font-size:13px; font-weight:700;">Start</button>
-        <button id="finishBtn" style="border:none; background:oklch(0.3 0.01 90); color:white; border-radius:9px; padding:8px 18px; font-size:13px; font-weight:700;">Finish</button>
+        <button id="phaseBtn" style="border:none; background:oklch(0.5 0.01 90); color:white; border-radius:9px; padding:8px 22px; font-size:13px; font-weight:700; min-width:90px;">Setup</button>
       </div>
     </div>
 
@@ -172,7 +171,8 @@ function removeShark(id) {
 }
 
 function resetAll() {
-  if (getSessionStatus() === 'finished') return;
+  const phase = getPhase();
+  if (phase === 'setup' || phase === 'finished') return;
   if (!confirm('Clear all rounds and results?')) return;
   state.results = {};
   state.round = 1;
@@ -180,10 +180,13 @@ function resetAll() {
   render();
 }
 
-function getSessionStatus() {
+// Session lifecycle: legacy (untouched/free-editing) -> setup (names only, board
+// locked) -> active (timer running, board open) -> finished (locked) -> setup -> ...
+function getPhase() {
   if (state.sessionFinishedAt) return 'finished';
   if (state.sessionStartedAt) return 'active';
-  return 'idle';
+  if (state.sessionDate) return 'setup';
+  return 'legacy';
 }
 
 function formatDuration(ms) {
@@ -209,33 +212,45 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function startSession() {
-  if (!confirm('Start a new session? This clears the round, all results, and the current Tanks/Sharks list.')) return;
+function doSetup() {
+  if (!confirm('Set up a new session? This clears the round, all results, and the current Tanks/Sharks list so you can enter fresh names before sparring starts.')) return;
   state.tanks = [];
   state.sharks = [];
   state.round = 1;
   state.results = {};
   state.sessionDate = todayLocalISO();
-  state.sessionStartedAt = Date.now();
+  state.sessionStartedAt = null;
   state.sessionFinishedAt = null;
   persist();
   render();
 }
 
-function finishSession() {
-  if (getSessionStatus() === 'finished') return;
-  if (!confirm('Finish this session? Scoring will be locked (read-only) until you start a new one.')) return;
+function doStart() {
+  state.sessionStartedAt = Date.now();
+  persist();
+  render();
+}
+
+function doFinish() {
+  if (!confirm('Finish this session? The board will lock (read-only) until you set up a new one.')) return;
   state.sessionFinishedAt = Date.now();
   persist();
   render();
 }
 
+function onPhaseBtnClick() {
+  const phase = getPhase();
+  if (phase === 'legacy' || phase === 'finished') doSetup();
+  else if (phase === 'setup') doStart();
+  else if (phase === 'active') doFinish();
+}
+
 function updateDurationDisplay() {
-  const status = getSessionStatus();
+  const phase = getPhase();
   const el = document.getElementById('durationLabel');
-  if (status === 'active' && state.sessionStartedAt) {
+  if (phase === 'active' && state.sessionStartedAt) {
     el.textContent = formatDuration(Date.now() - state.sessionStartedAt);
-  } else if (status === 'finished' && state.sessionStartedAt && state.sessionFinishedAt) {
+  } else if (phase === 'finished' && state.sessionStartedAt && state.sessionFinishedAt) {
     el.textContent = formatDuration(state.sessionFinishedAt - state.sessionStartedAt);
   } else {
     el.textContent = '—';
@@ -282,38 +297,57 @@ function labelFor(result) {
   return '—';
 }
 
+const PHASE_BUTTON = {
+  legacy: { label: 'Setup', bg: 'oklch(0.5 0.01 90)' },
+  setup: { label: 'Start', bg: 'oklch(0.4 0.13 230)' },
+  active: { label: 'Finish', bg: 'oklch(0.3 0.01 90)' },
+  finished: { label: 'Setup', bg: 'oklch(0.5 0.01 90)' }
+};
+
 function render() {
   document.getElementById('roundLabel').textContent = 'Round ' + state.round;
 
-  const status = getSessionStatus();
-  const locked = status === 'finished';
+  const phase = getPhase();
+  const cellsLocked = phase === 'setup' || phase === 'finished';
+  const rosterLocked = phase === 'finished';
+  const roundLocked = phase === 'setup' || phase === 'finished';
+  const resetLocked = phase === 'setup' || phase === 'finished';
 
   document.getElementById('dateLabel').textContent = formatDate(state.sessionDate);
   updateDurationDisplay();
 
+  const btnCfg = PHASE_BUTTON[phase];
+  const phaseBtn = document.getElementById('phaseBtn');
+  phaseBtn.textContent = btnCfg.label;
+  phaseBtn.style.background = btnCfg.bg;
+
   const statusEl = document.getElementById('sessionStatusLabel');
-  if (status === 'finished') {
+  if (phase === 'finished') {
     statusEl.style.display = 'inline-block';
     statusEl.textContent = 'Finished · Read-only';
     statusEl.style.background = 'oklch(0.9 0.02 90)';
     statusEl.style.color = 'oklch(0.35 0.01 90)';
-  } else if (status === 'active') {
+  } else if (phase === 'active') {
     statusEl.style.display = 'inline-block';
     statusEl.textContent = 'Live';
     statusEl.style.background = 'oklch(0.92 0.06 150)';
     statusEl.style.color = 'oklch(0.35 0.1 150)';
+  } else if (phase === 'setup') {
+    statusEl.style.display = 'inline-block';
+    statusEl.textContent = 'Setting up · not started';
+    statusEl.style.background = 'oklch(0.92 0.06 80)';
+    statusEl.style.color = 'oklch(0.4 0.1 80)';
   } else {
     statusEl.style.display = 'none';
   }
 
-  document.getElementById('decRound').disabled = locked;
-  document.getElementById('incRound').disabled = locked;
-  document.getElementById('newTankInput').disabled = locked;
-  document.getElementById('addTankBtn').disabled = locked;
-  document.getElementById('newSharkInput').disabled = locked;
-  document.getElementById('addSharkBtn').disabled = locked;
-  document.getElementById('resetAllBtn').disabled = locked;
-  document.getElementById('finishBtn').disabled = locked;
+  document.getElementById('decRound').disabled = roundLocked;
+  document.getElementById('incRound').disabled = roundLocked;
+  document.getElementById('newTankInput').disabled = rosterLocked;
+  document.getElementById('addTankBtn').disabled = rosterLocked;
+  document.getElementById('newSharkInput').disabled = rosterLocked;
+  document.getElementById('addSharkBtn').disabled = rosterLocked;
+  document.getElementById('resetAllBtn').disabled = resetLocked;
 
   const { tanks, sharks, results, round } = state;
 
@@ -340,16 +374,20 @@ function render() {
 
   const grid = document.getElementById('grid');
   grid.innerHTML = html;
-  grid.style.pointerEvents = locked ? 'none' : '';
-  grid.style.opacity = locked ? '0.65' : '1';
 
   grid.querySelectorAll('.cell').forEach(el => {
+    el.style.pointerEvents = cellsLocked ? 'none' : '';
+    el.style.opacity = cellsLocked ? '0.45' : '1';
     el.addEventListener('click', () => tapCell(el.dataset.tank, el.dataset.shark));
   });
   grid.querySelectorAll('.tankHeader').forEach(el => {
+    el.style.pointerEvents = rosterLocked ? 'none' : '';
+    el.style.opacity = rosterLocked ? '0.55' : '1';
     el.addEventListener('click', () => removeTank(el.dataset.id));
   });
   grid.querySelectorAll('.sharkHeader').forEach(el => {
+    el.style.pointerEvents = rosterLocked ? 'none' : '';
+    el.style.opacity = rosterLocked ? '0.55' : '1';
     el.addEventListener('click', () => removeShark(el.dataset.id));
   });
 }
@@ -361,8 +399,7 @@ document.getElementById('addSharkBtn').addEventListener('click', addShark);
 document.getElementById('resetAllBtn').addEventListener('click', resetAll);
 document.getElementById('newTankInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTank(); });
 document.getElementById('newSharkInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addShark(); });
-document.getElementById('startBtn').addEventListener('click', startSession);
-document.getElementById('finishBtn').addEventListener('click', finishSession);
+document.getElementById('phaseBtn').addEventListener('click', onPhaseBtnClick);
 
 render();
 setInterval(updateDurationDisplay, 1000);
